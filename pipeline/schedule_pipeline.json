@@ -1,0 +1,79 @@
+{
+	"name": "schedule_pipeline",
+	"properties": {
+		"activities": [
+			{
+				"name": "execute_ingestion_pipeline",
+				"type": "ExecutePipeline",
+				"dependsOn": [],
+				"policy": {
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"pipeline": {
+						"referenceName": "ingestion_pipeline",
+						"type": "PipelineReference"
+					},
+					"waitOnCompletion": true,
+					"parameters": {
+						"schema": {
+							"value": "@pipeline().parameters.schema",
+							"type": "Expression"
+						},
+						"table": {
+							"value": "@pipeline().parameters.table",
+							"type": "Expression"
+						},
+						"backdate": {
+							"value": "@pipeline().parameters.backdate",
+							"type": "Expression"
+						}
+					}
+				}
+			},
+			{
+				"name": "mail_on_failure",
+				"type": "WebActivity",
+				"dependsOn": [
+					{
+						"activity": "execute_ingestion_pipeline",
+						"dependencyConditions": [
+							"Failed"
+						]
+					}
+				],
+				"policy": {
+					"timeout": "0.12:00:00",
+					"retry": 0,
+					"retryIntervalInSeconds": 30,
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"method": "POST",
+					"url": "https://prod-22.northcentralus.logic.azure.com:443/workflows/23904a785fbe473c827a5baa9ba4103e/triggers/When_an_HTTP_request_is_received/paths/invoke?api-version=2016-10-01&sp=%2Ftriggers%2FWhen_an_HTTP_request_is_received%2Frun&sv=1.0&sig=sxRJDgQv0BxdeWCRd-nQa2Zsvv4WTUqQ_R_p1lfbkso",
+					"body": {
+						"value": "{\n    \"pipeline_name\":\"@{pipeline().Pipeline}\",\n    \"pipeline_runId\":\"@{pipeline().RunId}\"\n}",
+						"type": "Expression"
+					}
+				}
+			}
+		],
+		"parameters": {
+			"schema": {
+				"type": "string"
+			},
+			"table": {
+				"type": "string"
+			},
+			"backdate": {
+				"type": "string"
+			}
+		},
+		"annotations": [],
+		"lastPublishTime": "2025-10-29T09:36:20Z"
+	},
+	"type": "Microsoft.DataFactory/factories/pipelines"
+}

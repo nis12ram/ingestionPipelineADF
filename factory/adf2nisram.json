@@ -1,0 +1,9 @@
+{
+	"name": "adf2nisram",
+	"location": "eastus",
+	"identity": {
+		"type": "SystemAssigned",
+		"principalId": "8cb6921e-2c6f-4de2-b5c0-03e122b94e56",
+		"tenantId": "ff3f6e21-84cd-4f70-bea6-6080dd264710"
+	}
+}

@@ -1,0 +1,289 @@
+{
+	"name": "ingestion_pipeline",
+	"properties": {
+		"activities": [
+			{
+				"name": "last_cdc",
+				"type": "Lookup",
+				"dependsOn": [],
+				"policy": {
+					"timeout": "0.12:00:00",
+					"retry": 0,
+					"retryIntervalInSeconds": 30,
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"source": {
+						"type": "JsonSource",
+						"storeSettings": {
+							"type": "AzureBlobFSReadSettings",
+							"recursive": true,
+							"enablePartitionDiscovery": false
+						},
+						"formatSettings": {
+							"type": "JsonReadSettings"
+						}
+					},
+					"dataset": {
+						"referenceName": "dynamic_json",
+						"type": "DatasetReference",
+						"parameters": {
+							"container": "source",
+							"folder": "monitor",
+							"file": "cdc.json"
+						}
+					},
+					"firstRowOnly": false
+				}
+			},
+			{
+				"name": "total_new_records_to_load",
+				"type": "Script",
+				"dependsOn": [
+					{
+						"activity": "last_cdc",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"policy": {
+					"timeout": "0.12:00:00",
+					"retry": 0,
+					"retryIntervalInSeconds": 30,
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"linkedServiceName": {
+					"referenceName": "LinkedServiceSQLDB",
+					"type": "LinkedServiceReference"
+				},
+				"typeProperties": {
+					"scripts": [
+						{
+							"type": "Query",
+							"text": {
+								"value": "SELECT COUNT(*) AS total_count FROM @{pipeline().parameters.schema}.@{pipeline().parameters.table} WHERE last_updated > '@{if(empty(pipeline().parameters.backdate), activity('last_cdc').output.value[0].cdc_timestamp, pipeline().parameters.backdate)}'",
+								"type": "Expression"
+							}
+						}
+					],
+					"scriptBlockExecutionTimeout": "02:00:00"
+				}
+			},
+			{
+				"name": "if_new_records_to_load",
+				"type": "IfCondition",
+				"dependsOn": [
+					{
+						"activity": "total_new_records_to_load",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"userProperties": [],
+				"typeProperties": {
+					"expression": {
+						"value": "@greater(activity('total_new_records_to_load').output.resultSets[0].rows[0].total_count, 0)",
+						"type": "Expression"
+					},
+					"ifTrueActivities": [
+						{
+							"name": "sql_to_lake",
+							"description": "copy table from Azure SQL to ADLS",
+							"type": "Copy",
+							"dependsOn": [],
+							"policy": {
+								"timeout": "0.12:00:00",
+								"retry": 0,
+								"retryIntervalInSeconds": 30,
+								"secureOutput": false,
+								"secureInput": false
+							},
+							"userProperties": [],
+							"typeProperties": {
+								"source": {
+									"type": "AzureSqlSource",
+									"sqlReaderQuery": {
+										"value": "SELECT * FROM @{pipeline().parameters.schema}.@{pipeline().parameters.table} WHERE last_updated > '@{if(empty(pipeline().parameters.backdate), activity('last_cdc').output.value[0].cdc_timestamp, pipeline().parameters.backdate)}'",
+										"type": "Expression"
+									},
+									"queryTimeout": "02:00:00",
+									"partitionOption": "None"
+								},
+								"sink": {
+									"type": "ParquetSink",
+									"storeSettings": {
+										"type": "AzureBlobFSWriteSettings"
+									},
+									"formatSettings": {
+										"type": "ParquetWriteSettings"
+									}
+								},
+								"enableStaging": false,
+								"translator": {
+									"type": "TabularTranslator",
+									"typeConversion": true,
+									"typeConversionSettings": {
+										"allowDataTruncation": true,
+										"treatBooleanAsNumber": false
+									}
+								}
+							},
+							"inputs": [
+								{
+									"referenceName": "dynamic_sql_query",
+									"type": "DatasetReference"
+								}
+							],
+							"outputs": [
+								{
+									"referenceName": "dynamic_parquet",
+									"type": "DatasetReference",
+									"parameters": {
+										"container": "sink",
+										"folder": {
+											"value": "@pipeline().parameters.table",
+											"type": "Expression"
+										},
+										"file": " "
+									}
+								}
+							]
+						},
+						{
+							"name": "update_last_cdc_with_new_cdc",
+							"type": "Copy",
+							"dependsOn": [
+								{
+									"activity": "get_new_cdc",
+									"dependencyConditions": [
+										"Succeeded"
+									]
+								}
+							],
+							"policy": {
+								"timeout": "0.12:00:00",
+								"retry": 0,
+								"retryIntervalInSeconds": 30,
+								"secureOutput": false,
+								"secureInput": false
+							},
+							"userProperties": [],
+							"typeProperties": {
+								"source": {
+									"type": "JsonSource",
+									"additionalColumns": [
+										{
+											"name": "cdc_timestamp",
+											"value": {
+												"value": "@activity('get_new_cdc').output.resultSets[0].rows[0].cdc_timestamp",
+												"type": "Expression"
+											}
+										}
+									],
+									"storeSettings": {
+										"type": "AzureBlobFSReadSettings",
+										"recursive": true,
+										"enablePartitionDiscovery": false
+									},
+									"formatSettings": {
+										"type": "JsonReadSettings"
+									}
+								},
+								"sink": {
+									"type": "JsonSink",
+									"storeSettings": {
+										"type": "AzureBlobFSWriteSettings"
+									},
+									"formatSettings": {
+										"type": "JsonWriteSettings"
+									}
+								},
+								"enableStaging": false
+							},
+							"inputs": [
+								{
+									"referenceName": "dynamic_json",
+									"type": "DatasetReference",
+									"parameters": {
+										"container": "source",
+										"folder": "monitor",
+										"file": "empty.json"
+									}
+								}
+							],
+							"outputs": [
+								{
+									"referenceName": "dynamic_json",
+									"type": "DatasetReference",
+									"parameters": {
+										"container": "source",
+										"folder": "monitor",
+										"file": "cdc.json"
+									}
+								}
+							]
+						},
+						{
+							"name": "get_new_cdc",
+							"type": "Script",
+							"dependsOn": [
+								{
+									"activity": "sql_to_lake",
+									"dependencyConditions": [
+										"Succeeded"
+									]
+								}
+							],
+							"policy": {
+								"timeout": "0.12:00:00",
+								"retry": 0,
+								"retryIntervalInSeconds": 30,
+								"secureOutput": false,
+								"secureInput": false
+							},
+							"userProperties": [],
+							"linkedServiceName": {
+								"referenceName": "LinkedServiceSQLDB",
+								"type": "LinkedServiceReference"
+							},
+							"typeProperties": {
+								"scripts": [
+									{
+										"type": "Query",
+										"text": {
+											"value": "SELECT MAX(last_updated) AS cdc_timestamp FROM @{pipeline().parameters.schema}.@{pipeline().parameters.table}",
+											"type": "Expression"
+										}
+									}
+								],
+								"scriptBlockExecutionTimeout": "02:00:00"
+							}
+						}
+					]
+				}
+			}
+		],
+		"parameters": {
+			"schema": {
+				"type": "string",
+				"defaultValue": "source"
+			},
+			"table": {
+				"type": "string",
+				"defaultValue": "Orders"
+			},
+			"backdate": {
+				"type": "string"
+			}
+		},
+		"annotations": [],
+		"lastPublishTime": "2025-10-29T06:06:49Z"
+	},
+	"type": "Microsoft.DataFactory/factories/pipelines"
+}
